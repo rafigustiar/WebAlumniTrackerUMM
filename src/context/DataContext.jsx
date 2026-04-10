@@ -1,10 +1,11 @@
-import React, { createContext, useReducer, useCallback } from 'react';
+import React, { createContext, useReducer, useCallback, useEffect } from 'react';
 import { alumniService, trackingService } from '../utils/storage';
+import { isSupabaseEnabled } from '../utils/supabase';
 
 export const DataContext = createContext();
 
 const initialState = {
-  alumni: alumniService.getAll(),
+  alumni: [],
   tracking: trackingService.getAll(),
   error: null,
   loading: false,
@@ -61,9 +62,9 @@ const dataReducer = (state, action) => {
 export const DataProvider = ({ children }) => {
   const [state, dispatch] = useReducer(dataReducer, initialState);
 
-  const addAlumni = useCallback((alumniData) => {
+  const addAlumni = useCallback(async (alumniData) => {
     dispatch({ type: 'SET_LOADING' });
-    const result = alumniService.add(alumniData);
+    const result = isSupabaseEnabled ? await alumniService.addRemote(alumniData) : alumniService.add(alumniData);
     if (result.success) {
       dispatch({ type: 'ADD_ALUMNI', payload: result.data });
       return { success: true };
@@ -73,9 +74,9 @@ export const DataProvider = ({ children }) => {
     }
   }, []);
 
-  const updateAlumni = useCallback((id, alumniData) => {
+  const updateAlumni = useCallback(async (id, alumniData) => {
     dispatch({ type: 'SET_LOADING' });
-    const result = alumniService.update(id, alumniData);
+    const result = isSupabaseEnabled ? await alumniService.updateRemote(id, alumniData) : alumniService.update(id, alumniData);
     if (result.success) {
       dispatch({ type: 'UPDATE_ALUMNI', payload: result.data });
       return { success: true };
@@ -85,9 +86,9 @@ export const DataProvider = ({ children }) => {
     }
   }, []);
 
-  const deleteAlumni = useCallback((id) => {
+  const deleteAlumni = useCallback(async (id) => {
     dispatch({ type: 'SET_LOADING' });
-    const result = alumniService.delete(id);
+    const result = isSupabaseEnabled ? await alumniService.deleteRemote(id) : alumniService.delete(id);
     if (result.success) {
       dispatch({ type: 'DELETE_ALUMNI', payload: id });
       return { success: true };
@@ -95,6 +96,55 @@ export const DataProvider = ({ children }) => {
       dispatch({ type: 'SET_ERROR', payload: result.error });
       return { success: false, error: result.error };
     }
+  }, []);
+
+  const importAlumni = useCallback(async (records) => {
+    dispatch({ type: 'SET_LOADING' });
+    const result = isSupabaseEnabled ? await alumniService.importBatchRemote(records) : alumniService.importBatch(records);
+    if (result.success) {
+      const alumniData = isSupabaseEnabled
+        ? (await alumniService.getAllRemote()).data
+        : alumniService.getAll();
+      dispatch({ type: 'SET_ALUMNI', payload: alumniData });
+      return { success: true, summary: result.summary };
+    } else {
+      dispatch({ type: 'SET_ERROR', payload: result.error });
+      return { success: false, error: result.error };
+    }
+  }, []);
+
+  const syncLocalToSupabase = useCallback(async () => {
+    if (!isSupabaseEnabled) {
+      return { success: false, error: 'Supabase belum dikonfigurasi' };
+    }
+
+    dispatch({ type: 'SET_LOADING' });
+    const localData = alumniService.getAll();
+    const result = await alumniService.importBatchRemote(localData);
+    if (result.success) {
+      const alumniData = (await alumniService.getAllRemote()).data;
+      dispatch({ type: 'SET_ALUMNI', payload: alumniData });
+      return { success: true, summary: result.summary };
+    }
+
+    dispatch({ type: 'SET_ERROR', payload: result.error });
+    return { success: false, error: result.error };
+  }, []);
+
+  const syncRemoteToLocal = useCallback(async () => {
+    if (!isSupabaseEnabled) {
+      return { success: false, error: 'Supabase belum dikonfigurasi' };
+    }
+
+    dispatch({ type: 'SET_LOADING' });
+    const result = await alumniService.getAllRemote();
+    if (result.success) {
+      dispatch({ type: 'SET_ALUMNI', payload: result.data });
+      return { success: true, data: result.data };
+    }
+
+    dispatch({ type: 'SET_ERROR', payload: result.error });
+    return { success: false, error: result.error };
   }, []);
 
   const addTracking = useCallback((trackingData, currentUser) => {
@@ -117,16 +167,35 @@ export const DataProvider = ({ children }) => {
     dispatch({ type: 'CLEAR_SUCCESS' });
   }, []);
 
-  const refreshData = useCallback(() => {
-    dispatch({ type: 'SET_ALUMNI', payload: alumniService.getAll() });
+  const refreshData = useCallback(async () => {
+    dispatch({ type: 'SET_LOADING' });
+
+    const alumniResult = isSupabaseEnabled
+      ? await alumniService.getAllRemote()
+      : { success: true, data: alumniService.getAll() };
+
+    if (alumniResult.success) {
+      dispatch({ type: 'SET_ALUMNI', payload: alumniResult.data });
+    } else {
+      dispatch({ type: 'SET_ALUMNI', payload: alumniService.getAll() });
+      dispatch({ type: 'SET_ERROR', payload: alumniResult.error });
+    }
+
     dispatch({ type: 'SET_TRACKING', payload: trackingService.getAll() });
   }, []);
+
+  useEffect(() => {
+    refreshData();
+  }, [refreshData]);
 
   const value = {
     ...state,
     addAlumni,
     updateAlumni,
     deleteAlumni,
+    importAlumni,
+    syncLocalToSupabase,
+    syncRemoteToLocal,
     addTracking,
     clearError,
     clearSuccess,

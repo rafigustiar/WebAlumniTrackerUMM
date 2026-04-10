@@ -1,7 +1,9 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, Search } from 'lucide-react';
+import { Plus, Cloud, RefreshCcw } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
+import { isSupabaseEnabled } from '../utils/supabase';
 import { Button, Input, Select } from '../components/FormElements';
 import { Table } from '../components/Table';
 import { Modal, ConfirmDialog } from '../components/Modal';
@@ -9,10 +11,9 @@ import { Alert } from '../components/Alert';
 import { Card } from '../components/Card';
 import { formatDate } from '../utils/helpers';
 import { validators, validateForm } from '../utils/validators';
-import { alumniService } from '../utils/storage';
 
 export const AlumniManagementPage = () => {
-  const { alumni, addAlumni, updateAlumni, deleteAlumni, error, success, clearError, clearSuccess } = useData();
+  const { alumni, addAlumni, updateAlumni, deleteAlumni, importAlumni, syncLocalToSupabase, syncRemoteToLocal, error, success, clearError, clearSuccess } = useData();
   const { user } = useAuth();
 
   // State untuk form
@@ -38,6 +39,14 @@ export const AlumniManagementPage = () => {
 
   const [formValues, setFormValues] = useState(initialFormValues);
   const [formErrors, setFormErrors] = useState({});
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [importError, setImportError] = useState('');
+  const [importSummary, setImportSummary] = useState(null);
+  const [isImportLoading, setIsImportLoading] = useState(false);
+  const [syncError, setSyncError] = useState('');
+  const [syncSummary, setSyncSummary] = useState(null);
+  const [isSyncLoading, setIsSyncLoading] = useState(false);
 
   // Filter dan search alumni
   const filteredAlumni = useMemo(() => {
@@ -102,9 +111,9 @@ export const AlumniManagementPage = () => {
     let result;
 
     if (editingId) {
-      result = updateAlumni(editingId, formValues);
+      result = await updateAlumni(editingId, formValues);
     } else {
-      result = addAlumni(formValues);
+      result = await addAlumni(formValues);
     }
 
     setIsLoadingForm(false);
@@ -112,6 +121,176 @@ export const AlumniManagementPage = () => {
     if (result.success) {
       setIsModalOpen(false);
       resetForm();
+    }
+  };
+
+  const normalizeImportRow = (raw) => {
+    const normalized = {};
+    Object.entries(raw).forEach(([key, value]) => {
+      const normalizedKey = key.trim().toLowerCase().replace(/\s+/g, '_');
+      normalized[normalizedKey] = value;
+    });
+
+    return {
+      name: normalized.nama_lulusan || normalized.nama || normalized.name || '',
+      nim: normalized.nim || '',
+      tahun_masuk: normalized.tahun_masuk || normalized.tahun_masuk || '',
+      tanggal_lulus: normalized.tanggal_lulus || normalized.tanggal_lulus || '',
+      fakultas: normalized.fakultas || '',
+      program_studi: normalized.program_studi || normalized.program_studi || '',
+      linkedin: normalized.linkedin || '',
+      instagram: normalized.instagram || '',
+      facebook: normalized.facebook || '',
+      tiktok: normalized.tiktok || '',
+      email: normalized.email || '',
+      no_hp: normalized.no_hp || normalized['no hp'] || '',
+      tempat_bekerja: normalized.tempat_bekerja || normalized['tempat bekerja'] || '',
+      alamat_bekerja: normalized.alamat_bekerja || normalized['alamat bekerja'] || '',
+      posisi: normalized.posisi || '',
+      jenis_pekerjaan: normalized.jenis_pekerjaan || normalized['jenis pekerjaan'] || '',
+      sosial_media_tempat_kerja: normalized.sosial_media_tempat_kerja || normalized['sosial media tempat kerja'] || ''
+    };
+  };
+
+  const parseCsvRow = (row) => {
+    const values = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < row.length; i += 1) {
+      const char = row[i];
+      if (char === '"') {
+        if (inQuotes && row[i + 1] === '"') {
+          current += '"';
+          i += 1;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        values.push(current);
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    values.push(current);
+    return values;
+  };
+
+  const parseCsvText = (text) => {
+    const rows = text.split(/\r\n|\n/).filter((line) => line.trim() !== '');
+    if (rows.length === 0) return [];
+
+    const headers = parseCsvRow(rows[0]).map((header) => header.trim().toLowerCase().replace(/\s+/g, '_'));
+    return rows.slice(1).map((row) => {
+      const values = parseCsvRow(row);
+      const raw = {};
+      headers.forEach((header, index) => {
+        raw[header] = values[index] ? values[index].trim() : '';
+      });
+      return normalizeImportRow(raw);
+    });
+  };
+
+  const readFileAsText = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file, 'UTF-8');
+  });
+
+  const readFileAsArrayBuffer = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(file);
+  });
+
+  const handleImportFileChange = (e) => {
+    setImportError('');
+    setImportSummary(null);
+    const file = e.target.files?.[0];
+    if (!file) {
+      setImportFile(null);
+      return;
+    }
+
+    const extension = file.name.split('.').pop().toLowerCase();
+    if (!['csv', 'xlsx', 'xls'].includes(extension)) {
+      setImportError('File harus berformat CSV atau Excel (.csv, .xlsx, .xls)');
+      setImportFile(null);
+      return;
+    }
+
+    setImportFile(file);
+  };
+
+  const handleImportSubmit = async () => {
+    if (!importFile) {
+      setImportError('Silakan pilih file CSV atau Excel terlebih dahulu.');
+      return;
+    }
+
+    setIsImportLoading(true);
+    setImportError('');
+    setImportSummary(null);
+
+    try {
+      let records = [];
+      const extension = importFile.name.split('.').pop().toLowerCase();
+
+      if (extension === 'csv') {
+        const text = await readFileAsText(importFile);
+        records = parseCsvText(text);
+      } else {
+        const arrayBuffer = await readFileAsArrayBuffer(importFile);
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const rawData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+        records = rawData.map(normalizeImportRow);
+      }
+
+      if (records.length === 0) {
+        setImportError('Tidak ada baris data yang ditemukan di file. Pastikan file memiliki header dan data.');
+        return;
+      }
+
+      const result = await importAlumni(records);
+      if (result.success) {
+        setImportSummary(result.summary);
+        setIsImportOpen(false);
+        setImportFile(null);
+      } else {
+        setImportError(result.error || 'Gagal mengimpor data alumni.');
+      }
+    } catch (error) {
+      setImportError(error.message || 'Terjadi kesalahan saat memproses file import.');
+    } finally {
+      setIsImportLoading(false);
+    }
+  };
+
+  const handleSyncSupabase = async () => {
+    if (!isSupabaseEnabled) {
+      setSyncError('Supabase belum dikonfigurasi. Periksa file .env dan ulangi.');
+      return;
+    }
+
+    setIsSyncLoading(true);
+    setSyncError('');
+    setSyncSummary(null);
+
+    try {
+      const result = await syncLocalToSupabase();
+      if (result.success) {
+        setSyncSummary(`Sinkron berhasil: ${result.summary.added} baru, ${result.summary.updated} diperbarui, ${result.summary.skipped} dilewati.`);
+      } else {
+        setSyncError(result.error || 'Gagal sinkronisasi Supabase.');
+      }
+    } catch (error) {
+      setSyncError(error.message || 'Terjadi kesalahan saat sinkronisasi Supabase.');
+    } finally {
+      setIsSyncLoading(false);
     }
   };
 
@@ -140,9 +319,9 @@ export const AlumniManagementPage = () => {
     setDeleteId(id);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (deleteId) {
-      deleteAlumni(deleteId);
+      await deleteAlumni(deleteId);
       setDeleteId(null);
     }
   };
@@ -192,6 +371,27 @@ export const AlumniManagementPage = () => {
       {/* Alerts */}
       {error && <Alert type="error" message={error} onClose={clearError} />}
       {success && <Alert type="success" message={success} onClose={clearSuccess} />}
+      {importSummary && (
+        <Alert
+          type="success"
+          message={`Import selesai: ${importSummary.added} ditambah, ${importSummary.updated} diperbarui, ${importSummary.skipped} dilewati.`}
+          onClose={() => setImportSummary(null)}
+        />
+      )}
+      {syncSummary && (
+        <Alert
+          type="success"
+          message={syncSummary}
+          onClose={() => setSyncSummary(null)}
+        />
+      )}
+      {syncError && (
+        <Alert
+          type="error"
+          message={syncError}
+          onClose={() => setSyncError('')}
+        />
+      )}
 
       {/* Toolbar */}
       <Card>
@@ -215,13 +415,34 @@ export const AlumniManagementPage = () => {
             className="lg:w-48"
           />
           {canEdit && (
-            <Button
-              onClick={() => setIsModalOpen(true)}
-              className="lg:w-auto"
-            >
-              <Plus size={18} />
-              Tambah Alumni
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              {isSupabaseEnabled && (
+                <Button
+                  variant="ghost"
+                  onClick={handleSyncSupabase}
+                  className="lg:w-auto"
+                  isLoading={isSyncLoading}
+                >
+                  <RefreshCcw size={18} />
+                  Sinkron Supabase
+                </Button>
+              )}
+              <Button
+                variant="secondary"
+                onClick={() => setIsImportOpen(true)}
+                className="lg:w-auto"
+              >
+                <Cloud size={18} />
+                Import CSV/Excel
+              </Button>
+              <Button
+                onClick={() => setIsModalOpen(true)}
+                className="lg:w-auto"
+              >
+                <Plus size={18} />
+                Tambah Alumni
+              </Button>
+            </div>
           )}
         </div>
       </Card>
@@ -328,6 +549,40 @@ export const AlumniManagementPage = () => {
               error={formErrors.company}
               required
             />
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={isImportOpen}
+        title="Import Data Alumni"
+        onClose={() => setIsImportOpen(false)}
+        onSubmit={handleImportSubmit}
+        submitText="Import"
+        isLoading={isImportLoading}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Unggah file CSV atau Excel. Header yang dibaca:
+            <strong className="block">Nama Lulusan, NIM, Tahun Masuk, Tanggal Lulus, Fakultas, Program Studi</strong>
+          </p>
+          <Input
+            label="Pilih file"
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            onChange={handleImportFileChange}
+            error={importError}
+          />
+          {importFile && (
+            <p className="text-sm text-slate-600">File terpilih: {importFile.name}</p>
+          )}
+          <div className="rounded-lg bg-blue-50 border border-blue-100 p-4 text-sm text-slate-700">
+            <p className="font-semibold mb-2">Catatan import:</p>
+            <ul className="list-disc ml-5 space-y-1">
+              <li>Jika NIM sudah ada, data akan diperbarui secara aman.</li>
+              <li>Data tambahan seperti linkedin, instagram, facebook, tiktok, email, no_hp, tempat_bekerja, alamat_bekerja, posisi, jenis_pekerjaan, sosial_media_tempat_kerja akan disimpan sebagai string kosong jika tidak tersedia.</li>
+              <li>Duplikat berdasarkan NIM ditangani otomatis.</li>
+            </ul>
           </div>
         </div>
       </Modal>

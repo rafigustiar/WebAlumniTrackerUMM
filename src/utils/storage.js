@@ -1,3 +1,5 @@
+import { supabase, isSupabaseEnabled } from './supabase';
+
 // Utility untuk localStorage management
 const STORAGE_KEYS = {
   ALUMNI: 'alumni_data',
@@ -6,30 +8,54 @@ const STORAGE_KEYS = {
   CURRENT_USER: 'current_user',
 };
 
+const SUPABASE_ALUMNI_TABLE = 'alumni';
+
+const mapSupabaseAlumniRow = (row) => ({
+  id: row.id?.toString() || Date.now().toString(),
+  nim: row.nim || '',
+  name: row.name || '',
+  email: row.email || '',
+  phone: row.phone || '',
+  graduationYear: row.graduationYear ?? row.graduation_year ?? null,
+  department: row.department || '',
+  gender: row.gender || '',
+  currentPosition: row.currentPosition || row.current_position || '',
+  company: row.company || '',
+  createdAt: row.created_at || row.createdAt || new Date().toISOString(),
+  updatedAt: row.updated_at || row.updatedAt || new Date().toISOString(),
+  linkedin: row.linkedin || '',
+  instagram: row.instagram || '',
+  facebook: row.facebook || '',
+  tiktok: row.tiktok || '',
+  tempat_bekerja: row.tempat_bekerja || '',
+  alamat_bekerja: row.alamat_bekerja || '',
+  posisi: row.posisi || '',
+  jenis_pekerjaan: row.jenis_pekerjaan || '',
+  sosial_media_tempat_kerja: row.sosial_media_tempat_kerja || ''
+});
+
+const normalizeAlumniPayload = (alumniData) => ({
+  ...alumniData,
+  graduationYear: alumniData.graduationYear || alumniData.graduation_year || null,
+  currentPosition: alumniData.currentPosition || alumniData.current_position || '',
+  tempat_bekerja: alumniData.tempat_bekerja || '',
+  alamat_bekerja: alumniData.alamat_bekerja || ''
+});
+
 // Initialize default data
 const initializeStorage = () => {
-  // Inisialisasi users
-  if (!localStorage.getItem(STORAGE_KEYS.USERS)) {
-    const defaultUsers = [
-      {
-        id: '1',
-        username: 'admin@umm.ac.id',
-        password: 'admin123',
-        role: 'admin',
-        name: 'Admin UMM',
-        email: 'admin@umm.ac.id'
-      },
-      {
-        id: '2',
-        username: 'operator@umm.ac.id',
-        password: 'operator123',
-        role: 'operator',
-        name: 'Operator UMM',
-        email: 'operator@umm.ac.id'
-      }
-    ];
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(defaultUsers));
-  }
+  // Inisialisasi users - selalu reset dengan credentials terbaru
+  const defaultUsers = [
+    {
+      id: '1',
+      username: 'admin28',
+      password: 'admin28',
+      role: 'admin',
+      name: 'Admin',
+      email: 'admin@umm.ac.id'
+    }
+  ];
+  localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(defaultUsers));
 
   // Inisialisasi alumni data
   if (!localStorage.getItem(STORAGE_KEYS.ALUMNI)) {
@@ -406,6 +432,184 @@ export const alumniService = {
     return alumni.find(item => item.id === id);
   },
 
+  // Get alumni by NIM
+  getByNim: (nim) => {
+    const alumni = alumniService.getAll();
+    return alumni.find(item => item.nim === nim);
+  },
+
+  // Remote Supabase: get all alumni
+  getAllRemote: async () => {
+    if (!isSupabaseEnabled || !supabase) {
+      return { success: false, error: 'Supabase tidak dikonfigurasi' };
+    }
+
+    const { data, error } = await supabase.from(SUPABASE_ALUMNI_TABLE).select('*');
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    return {
+      success: true,
+      data: data.map(mapSupabaseAlumniRow)
+    };
+  },
+
+  // Remote Supabase: add alumni
+  addRemote: async (alumniData) => {
+    if (!isSupabaseEnabled || !supabase) {
+      return { success: false, error: 'Supabase tidak dikonfigurasi' };
+    }
+
+    const payload = normalizeAlumniPayload(alumniData);
+    const { data, error } = await supabase
+      .from(SUPABASE_ALUMNI_TABLE)
+      .insert(payload)
+      .select()
+      .single();
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, data: mapSupabaseAlumniRow(data) };
+  },
+
+  // Remote Supabase: update alumni
+  updateRemote: async (id, alumniData) => {
+    if (!isSupabaseEnabled || !supabase) {
+      return { success: false, error: 'Supabase tidak dikonfigurasi' };
+    }
+
+    const payload = normalizeAlumniPayload(alumniData);
+    const { data, error } = await supabase
+      .from(SUPABASE_ALUMNI_TABLE)
+      .update(payload)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, data: mapSupabaseAlumniRow(data) };
+  },
+
+  // Remote Supabase: delete alumni
+  deleteRemote: async (id) => {
+    if (!isSupabaseEnabled || !supabase) {
+      return { success: false, error: 'Supabase tidak dikonfigurasi' };
+    }
+
+    const { error } = await supabase
+      .from(SUPABASE_ALUMNI_TABLE)
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    return { success: true };
+  },
+
+  // Remote Supabase: import batch alumni data
+  importBatchRemote: async (records) => {
+    if (!isSupabaseEnabled || !supabase) {
+      return { success: false, error: 'Supabase tidak dikonfigurasi' };
+    }
+
+    const payloads = records.map((record) => ({
+      ...normalizeAlumniPayload(record),
+      nim: String(record.nim || '').trim()
+    })).filter((record) => record.nim);
+
+    if (!payloads.length) {
+      return { success: true, summary: { added: 0, updated: 0, skipped: records.length } };
+    }
+
+    const { data, error } = await supabase
+      .from(SUPABASE_ALUMNI_TABLE)
+      .upsert(payloads, { onConflict: 'nim', returning: 'representation' });
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    return {
+      success: true,
+      summary: {
+        added: data.length,
+        updated: 0,
+        skipped: records.length - data.length
+      }
+    };
+  },
+
+  // Import batch alumni data
+  importBatch: (records) => {
+    try {
+      const alumni = alumniService.getAll();
+      const summary = { added: 0, updated: 0, skipped: 0 };
+
+      records.forEach((record) => {
+        const nim = String(record.nim || '').trim();
+        if (!nim) {
+          summary.skipped += 1;
+          return;
+        }
+
+        const mappedRecord = {
+          name: String(record.name || '').trim(),
+          nim,
+          email: String(record.email || '').trim(),
+          phone: String(record.no_hp || record.phone || '').trim(),
+          graduationYear: record.tanggal_lulus ? Number(new Date(record.tanggal_lulus).getFullYear()) : record.tahun_masuk ? Number(record.tahun_masuk) : null,
+          yearEntry: String(record.tahun_masuk || '').trim(),
+          graduationDate: String(record.tanggal_lulus || '').trim(),
+          faculty: String(record.fakultas || '').trim(),
+          studyProgram: String(record.program_studi || '').trim(),
+          department: String(record.program_studi || record.fakultas || '').trim(),
+          currentPosition: String(record.posisi || '').trim(),
+          company: String(record.tempat_bekerja || '').trim(),
+          linkedin: String(record.linkedin || '').trim(),
+          instagram: String(record.instagram || '').trim(),
+          facebook: String(record.facebook || '').trim(),
+          tiktok: String(record.tiktok || '').trim(),
+          tempat_bekerja: String(record.tempat_bekerja || '').trim(),
+          alamat_bekerja: String(record.alamat_bekerja || '').trim(),
+          posisi: String(record.posisi || '').trim(),
+          jenis_pekerjaan: String(record.jenis_pekerjaan || '').trim(),
+          sosial_media_tempat_kerja: String(record.sosial_media_tempat_kerja || '').trim()
+        };
+
+        const existingIndex = alumni.findIndex(item => item.nim === nim);
+        if (existingIndex !== -1) {
+          alumni[existingIndex] = {
+            ...alumni[existingIndex],
+            ...mappedRecord,
+            updatedAt: new Date().toISOString()
+          };
+          summary.updated += 1;
+        } else {
+          alumni.push({
+            ...mappedRecord,
+            id: Date.now().toString() + Math.random().toString(16).slice(2),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          });
+          summary.added += 1;
+        }
+      });
+
+      localStorage.setItem(STORAGE_KEYS.ALUMNI, JSON.stringify(alumni));
+      return { success: true, summary };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
   // Add new alumni
   add: (alumniData) => {
     try {
@@ -527,6 +731,11 @@ export const authService = {
   // Login
   login: (username, password) => {
     try {
+      // Only admin with admin28 credentials can login
+      if (username !== 'admin28' || password !== 'admin28') {
+        return { success: false, error: 'Hanya admin yang dapat login. Silakan gunakan username dan password: admin28' };
+      }
+      
       const users = JSON.parse(localStorage.getItem(STORAGE_KEYS.USERS) || '[]');
       const user = users.find(u => u.username === username && u.password === password);
       

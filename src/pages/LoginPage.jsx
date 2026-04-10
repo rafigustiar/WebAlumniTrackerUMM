@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { LogIn } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Button, Input } from '../components/FormElements';
@@ -6,15 +6,9 @@ import { Alert } from '../components/Alert';
 
 export const LoginPage = ({ onLoginSuccess }) => {
   const { login, error, clearError } = useAuth();
-  const [username, setUsername] = useState('admin@umm.ac.id');
-  const [password, setPassword] = useState('admin123');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [demoInfo, setDemoInfo] = useState(false);
-
-  useEffect(() => {
-    // Tampilkan info demo saat pertama kali
-    setDemoInfo(true);
-  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -30,18 +24,6 @@ export const LoginPage = ({ onLoginSuccess }) => {
     if (result.success) {
       onLoginSuccess?.();
     }
-  };
-
-  const setDemoAdmin = () => {
-    setUsername('admin@umm.ac.id');
-    setPassword('admin123');
-    clearError?.();
-  };
-
-  const setDemoOperator = () => {
-    setUsername('operator@umm.ac.id');
-    setPassword('operator123');
-    clearError?.();
   };
 
   return (
@@ -67,22 +49,13 @@ export const LoginPage = ({ onLoginSuccess }) => {
             />
           )}
 
-          {/* Demo Info */}
-          {demoInfo && (
-            <Alert
-              type="info"
-              message="Gunakan demo account untuk testing: admin@umm.ac.id atau operator@umm.ac.id"
-              onClose={() => setDemoInfo(false)}
-            />
-          )}
-
           <form onSubmit={handleSubmit} className="mt-6">
             <Input
               label="Username / Email"
-              type="email"
+              type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="admin@umm.ac.id"
+              placeholder="username"
               required
             />
 
@@ -104,28 +77,6 @@ export const LoginPage = ({ onLoginSuccess }) => {
               {isLoading ? 'Memproses...' : 'Login'}
             </Button>
           </form>
-
-          <div className="mt-6 border-t border-gray-200 pt-6">
-            <p className="text-xs text-gray-600 text-center mb-4 font-semibold">
-              Demo Accounts
-            </p>
-            <div className="space-y-2">
-              <button
-                onClick={setDemoAdmin}
-                className="w-full text-left p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-sm"
-              >
-                <p className="font-medium text-gray-900">Admin</p>
-                <p className="text-gray-500">admin@umm.ac.id</p>
-              </button>
-              <button
-                onClick={setDemoOperator}
-                className="w-full text-left p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-sm"
-              >
-                <p className="font-medium text-gray-900">Operator</p>
-                <p className="text-gray-500">operator@umm.ac.id</p>
-              </button>
-            </div>
-          </div>
         </div>
 
         {/* Footer */}
